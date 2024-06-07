@@ -1,0 +1,7 @@
+*.pyc
+*.cache
+*.log
+*.arrow
+data/data/
+tokenizer/trained_tokenizer/
+/venv/

@@ -1,0 +1,10 @@
+- name: "wikimedia/wikipedia"
+  subset: '20231101.en'
+  num_clf_classes: 0
+  num_regr: 0
+  text_columns:
+      - "text"
+  sentence_segmentation: True
+  validation_set_names: []
+  test_set_names: []
+  save_local_path:
