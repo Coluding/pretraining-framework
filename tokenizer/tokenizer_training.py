@@ -135,12 +135,12 @@ class TokenizerUtility:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     TokenizerUtility.train_tokenizer(output_dir="./trained_tokenizer",
-                                     dataset="wikimedia/wikipedia",
+                                     dataset="Skylion007/openwebtext",
                                      algorithm="ByteLevelBPETokenizer",
                                      vocab_size=30522,
                                      min_frequency=2,
                                      seed=42,
                                      max_documents=100000,
                                      text_column="text",
-                                     dataset_config="20231101.en"
+                                     dataset_config=None
                                      )

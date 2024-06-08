@@ -1,5 +1,5 @@
-- name: "wikimedia/wikipedia"
-  subset: '20231101.en'
+- name: "Skylion007/openwebtext"
+  subset: null
   num_clf_classes: 0
   num_regr: 0
   text_columns:

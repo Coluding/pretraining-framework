@@ -60,10 +60,9 @@ class PretrainingDataConfig:
 class AbstractPretrainingData(ABC):
     @abstractmethod
     def make_datasets(self) -> Tuple[torch.utils.data.dataset.Dataset,
-                                     torch.utils.data.dataset.Dataset,
-                                     torch.utils.data.dataset.Dataset]:
+    torch.utils.data.dataset.Dataset,
+    torch.utils.data.dataset.Dataset]:
         pass
-
 
     @abstractmethod
     def encode_by_batch(self,
@@ -130,7 +129,7 @@ class PretrainingData(AbstractPretrainingData):
         self.dataset: Optional[DatasetDict] = pretraining_data_config.dataset
         self.dataset_info: Optional[Union[DatasetInfo, List[DatasetInfo]]] = pretraining_data_config.dataset_info
         self.sentence_splitting: bool = pretraining_data_config.sentence_splitting
-        self.context_length: Union[bool, None] = pretraining_data_config.context_length#
+        self.context_length: Union[bool, None] = pretraining_data_config.context_length  #
         self.sentence_end_search_size: Optional[int] = pretraining_data_config.sentence_end_search_size
         self.dataset_sampling: Union[float, List[float]] = pretraining_data_config.dataset_sampling
         self.cache_dir: str = pretraining_data_config.cache_dir
@@ -167,7 +166,8 @@ class PretrainingData(AbstractPretrainingData):
             encode_method: EncodeMethod = EncodeMethod.SENTENCE_SPLITTING if sentence_splitting \
                 else EncodeMethod.CONTEXT_LENGTH
             cache_path: Path = PretrainingData._get_cache_path(dataset_info=d_info, cache_dir=cache_dir,
-                                                               encode_method=encode_method, context_length=self.context_length)
+                                                               encode_method=encode_method,
+                                                               context_length=self.context_length)
 
             if cache_path.exists():
                 logger.info(f"Load a cached dataset from {cache_path}")
@@ -263,8 +263,8 @@ class PretrainingData(AbstractPretrainingData):
         return combined_datasets
 
     def make_datasets(self) -> Tuple[torch.utils.data.dataset.Dataset,
-                                     torch.utils.data.dataset.Dataset,
-                                     torch.utils.data.dataset.Dataset]:
+    torch.utils.data.dataset.Dataset,
+    torch.utils.data.dataset.Dataset]:
         """
         This function is used to create the train, validation and test datasets. It does all the necessary preprocessing
         to create the datasets. It also allows to create a subset of the dataset for faster training.
@@ -346,7 +346,6 @@ class PretrainingData(AbstractPretrainingData):
             # Case you don't need to use data from train set for validation and/or test sets
             train_set = train_set.shuffle(seed=self.training_set_random_seed)
 
-
         assert val_set is not None and len(val_set) > 0, "Your validation set is empty"
 
         logger.info(f"Training size: {len(train_set)}")
@@ -399,13 +398,13 @@ class PretrainingData(AbstractPretrainingData):
     #TODO: It is tricky to set max context length in terms of words when they are converted
     @staticmethod
     def encode_by_batch_context(dataset: Dict[str, List],
-                                 tokenizer: Tokenizer,
-                                 max_length: int,
-                                 search_area_size: int,
-                                 text_columns: Union[List[str], str],
-                                 bos_token="<BOS>",
-                                 sep_token="<SEP>",
-                                 ) -> Dict[str, List]:
+                                tokenizer: Tokenizer,
+                                max_length: int,
+                                search_area_size: int,
+                                text_columns: Union[List[str], str],
+                                bos_token="<BOS>",
+                                sep_token="<SEP>",
+                                ) -> Dict[str, List]:
         """
         This function is used to encode the documents by batch. It will split the documents into chunks of max_length
         and tokenize them. If desired, it will also search for the end of the sentence to avoid splitting the sentence
@@ -419,6 +418,8 @@ class PretrainingData(AbstractPretrainingData):
         :return:
         """
         encoded_docs = []
+        position_ids = []
+        sequence_ids = []
 
         if isinstance(text_columns, list):
             text_columns = text_columns[0]
@@ -438,8 +439,7 @@ class PretrainingData(AbstractPretrainingData):
             else:
                 end_index = max_length - search_area_size
                 while True:
-
-                    current_words = words[:end_index]
+                    current_words: Iterable[str] = words[:end_index]
                     sentence_end_index = PretrainingData.search_for_sentence_end(words, end_index,
                                                                                  max_length - 1)
                     current_words.extend(words[end_index:end_index + sentence_end_index])
@@ -448,28 +448,34 @@ class PretrainingData(AbstractPretrainingData):
                     words = words[end_index + sentence_end_index:]
 
                     if len(words) < max_length:
+                        words.insert(0, bos_token)
                         chunks.append(' '.join(words))
                         break
 
                     end_index = max_length - search_area_size
 
-            encoded_doc = [encoding.ids for encoding in tokenizer.encode_batch(chunks)]
-            encoded_docs += [encoded_doc]
+            for encoding in tokenizer.encode_batch(chunks):
+                encoded_docs.append(encoding.ids)
+                position_ids.append([i for i in range(len(encoding.ids))])
+                sequence_ids.append([0 for _ in range(len(encoding.ids))])
+
+        combined: Dict[str, List] = {
+            "input_ids": encoded_docs, "position_ids": position_ids, "sequence_ids": sequence_ids
+        }
 
         if "label" in dataset:
-            return {"input_ids": encoded_docs,
-                    "label": dataset["label"]}
-        else:
-            return {"input_ids": encoded_docs}
+            combined["label"] = dataset["label"]
+
+        return combined
 
     @staticmethod
     def encode_by_batch(documents: Dict[str, List],
-                         tokenizer: Tokenizer,
-                         nlp: English,
-                         dataset_info: DatasetInfo,
-                         bos_token="<BOS>",
-                         sep_token="<SEP>",
-                         ) -> Dict[str, List]:
+                        tokenizer: Tokenizer,
+                        nlp: English,
+                        dataset_info: DatasetInfo,
+                        bos_token="<BOS>",
+                        sep_token="<SEP>",
+                        ) -> Dict[str, List]:
         """
         Perform sentence segmentaton and tokenization.
 
@@ -555,7 +561,9 @@ if __name__ == "__main__":
     from tokenizer.tokenizer_training import TokenizerUtility
     from collator import BaseCollator, CollatorConfig
     from torch.utils.data import DataLoader
-    tokenizer = TokenizerUtility.get_tokenizer("../tokenizer/trained_tokenizer/ByteLevelBPETokenizer-vocab_size=30522-min_frequency=2")
+
+    tokenizer = TokenizerUtility.get_tokenizer(
+        "../tokenizer/trained_tokenizer/ByteLevelBPETokenizer-vocab_size=30522-min_frequency=2")
     dataset_info = DatasetUtils.dataset_info_from_yaml("dataset_infos.yaml")
     pretraining_data_config = PretrainingDataConfig(tokenizer=tokenizer,
                                                     dataset_info=dataset_info,
@@ -572,14 +580,15 @@ if __name__ == "__main__":
                                                     training_set_random_seed=42,
                                                     valid_test_split_random_seed=42,
                                                     num_proc=1,
-                                                    subset_ratio=0.001) # only for debugging
+                                                    subset_ratio=0.005)  # only for debugging
 
     pretraining_data = PretrainingData(pretraining_data_config)
     ds = pretraining_data.make_datasets()
     collator_config = CollatorConfig(tokenizer=tokenizer,
                                      is_downstream=False,
+                                     max_length=512,
                                      pad_token_id=tokenizer.token_to_id("<PAD>"),
-                                     text_column="input_ids",
+                                     text_column=None,
                                      )
 
     collator = BaseCollator(collator_config)
