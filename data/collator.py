@@ -15,6 +15,7 @@ class CollatorConfig:
     text_column: Optional[str] = "text"
     label_column: Optional[str] = None
     input_format: Union[Dict[str, List], None] = None
+    sentence_splitter: Optional[bool] = False
 
     def __post_init__(self):
         if self.input_format is None:
@@ -43,7 +44,14 @@ class BaseCollator:
                 raise KeyError(f"Key {key} not found in input format. Check your input format in CollatorConfig")
 
         for key in ["input_ids", "position_ids", "sequence_ids"]:
-            inputs[key] = [torch.tensor([item[key]], dtype=torch.long).squeeze() for item in batch]
+            if self.cfg.sentence_splitter:
+                tensor_list = []
+                for item in batch:
+                    inner_tensor_list = [torch.tensor([seq], dtype=torch.long).squeeze() for seq in item[key]]
+                    tensor_list.extend(inner_tensor_list)
+                inputs[key] = tensor_list
+            else:
+                inputs[key] = [torch.tensor([item[key]], dtype=torch.long).squeeze() for item in batch]
 
             if self.cfg.max_length is not None:
                 inputs[key].append(torch.zeros(self.cfg.max_length))

@@ -1,8 +1,6 @@
 from abc import ABC, abstractmethod
 import torch
-from dataclasses import dataclass
-import yaml
-import csv
+import re
 from tqdm import tqdm
 import random
 import datasets
@@ -43,6 +41,7 @@ class PretrainingDataConfig:
     training_set_random_seed: int
     valid_test_split_random_seed: int
     num_proc: int
+    remove_special_chars: Optional[bool]
     subset_ratio: Optional[float]
 
     def __post_init__(self):
@@ -95,8 +94,8 @@ class PretrainingData(AbstractPretrainingData):
         Information about the dataset, which could be a single DatasetInfo object or a list of them.
     sentence_splitting : bool
         A flag indicating whether to perform sentence splitting on the text data.
-    context_length : Union[bool, None]
-        Defines the context length for the text data. Could be a boolean or None.
+    context_length : Union[int, None]
+        Defines the context length for the text data.
     sentence_end_search_size : Optional[int]
         The search size for finding the end of sentences during sentence splitting.
     dataset_sampling : Union[float, List[float]]
@@ -141,6 +140,7 @@ class PretrainingData(AbstractPretrainingData):
         self.valid_test_split_random_seed: int = pretraining_data_config.valid_test_split_random_seed
         self.num_proc: int = pretraining_data_config.num_proc
         self.subset_ratio: Optional[float] = pretraining_data_config.subset_ratio
+        self.remove_special_chars: Optional[bool] = pretraining_data_config.remove_special_chars
 
     def _collect_datasets(self,
                           dataset_info: Union[DatasetInfo, List[DatasetInfo]],
@@ -212,7 +212,8 @@ class PretrainingData(AbstractPretrainingData):
                                          tokenizer=self.tokenizer,
                                          max_length=self.context_length,
                                          search_area_size=self.sentence_end_search_size,
-                                         text_columns=d_info.text_columns)
+                                         text_columns=d_info.text_columns,
+                                         remove_special_chars=self.remove_special_chars)
 
                 else:
                     partial_fn = partial(self.encode_by_batch,
@@ -285,13 +286,22 @@ class PretrainingData(AbstractPretrainingData):
         :return: train dataset, validation dataset, test dataset
         """
 
-        combined_datasets: List[DatasetDict] = self._collect_datasets(dataset_info=dataset_info,
-                                                                      dataset_sampling=self.dataset_sampling,
-                                                                      sentence_splitting=self.sentence_splitting,
-                                                                      cache_dir=self.cache_dir,
-                                                                      dataset_dir=self.dataset_dir,
-                                                                      subset_ratio=self.subset_ratio,
-                                                                      num_proc=self.num_proc)
+        if self.dataset_info is None and self.dataset is None:
+            raise ValueError("Either dataset info or dataset should be provided")
+
+        if self.dataset_info is not None and self.dataset is not None:
+            raise ValueError("Either dataset info or dataset should be provided, not both")
+
+        if self.dataset is not None:
+            combined_datasets: List[DatasetDict] = [self.dataset]
+        else:
+            combined_datasets: List[DatasetDict] = self._collect_datasets(dataset_info=dataset_info,
+                                                                          dataset_sampling=self.dataset_sampling,
+                                                                          sentence_splitting=self.sentence_splitting,
+                                                                          cache_dir=self.cache_dir,
+                                                                          dataset_dir=self.dataset_dir,
+                                                                          subset_ratio=self.subset_ratio,
+                                                                          num_proc=self.num_proc)
 
         train_set = [combined_dataset["train"] for combined_dataset in combined_datasets]
         if len(train_set) > 1:
@@ -386,7 +396,7 @@ class PretrainingData(AbstractPretrainingData):
                 # Check if it's a typical sentence end or a special case like an abbreviation/number
                 if end_index < len(words) - 1:
                     if not (words[end_index] == "." and words[end_index - 1].isnumeric()):
-                        return add_on
+                        return add_on + 1
                 else:
                     # If it's the last word, and it's a punctuation, it's the end of a sentence
                     return end_index
@@ -404,6 +414,7 @@ class PretrainingData(AbstractPretrainingData):
                                 text_columns: Union[List[str], str],
                                 bos_token="<BOS>",
                                 sep_token="<SEP>",
+                                remove_special_chars: bool = True,
                                 ) -> Dict[str, List]:
         """
         This function is used to encode the documents by batch. It will split the documents into chunks of max_length
@@ -444,7 +455,11 @@ class PretrainingData(AbstractPretrainingData):
                                                                                  max_length - 1)
                     current_words.extend(words[end_index:end_index + sentence_end_index])
                     current_words.insert(0, bos_token)
-                    chunks.append(' '.join(current_words))
+                    word_str = ' '.join(current_words)
+                    if remove_special_chars:
+                        pattern = r'[^a-zA-Z0-9\s<>]'
+                        word_str = re.sub(pattern, '', word_str)
+                    chunks.append(word_str)
                     words = words[end_index + sentence_end_index:]
 
                     if len(words) < max_length:
@@ -486,6 +501,8 @@ class PretrainingData(AbstractPretrainingData):
         :return:
         """
         encoded_docs = []
+        position_ids = []
+        sequence_ids = []
 
         assert len(dataset_info.text_columns) >= 1
         # get length of dataset of the text column
@@ -501,15 +518,34 @@ class PretrainingData(AbstractPretrainingData):
             texts = [s + sep_token for s in d]
             # add CLS token to the beginning
             texts[0] = bos_token + texts[0]
+
+            # remove special characters
+            # TODO: fix this:
+            #if remove_special_chars:
+            #    pattern = r'[^a-zA-Z0-9\s]'
+            #    word_str = re.sub(pattern, '', word_str)
+
+
             # the encoded doc contains of n senteces, the first sentence has a BOS/CLS token at the beginning
             encoded_doc = [encoding.ids for encoding in tokenizer.encode_batch(texts)]
+            position_id = [list(range(1, len(encoding + 1))) for encoding in encoded_doc]
+
+            sequence_id = [[0 for _ in range(len(encoding))] for encoding in encoded_doc]
             encoded_docs += [encoded_doc]
+            position_ids += [position_id]
+            sequence_ids += [sequence_id]
+
 
         if "label" in documents:
             return {"input_ids": encoded_docs,
+                    "position_ids": position_ids,
+                    "sequence_ids": sequence_ids,
                     "label": documents["label"]}
         else:
-            return {"input_ids": encoded_docs}
+            return {"input_ids": encoded_docs,
+                    "position_ids": position_ids,
+                    "sequence_ids": sequence_ids}
+
 
     @staticmethod
     def _validate_dataset_infos(dataset_infos: List[DatasetInfo]):
@@ -570,7 +606,7 @@ if __name__ == "__main__":
                                                     dataset=None,
                                                     sentence_splitting=False,
                                                     context_length=300,
-                                                    sentence_end_search_size=10,
+                                                    sentence_end_search_size=30,
                                                     dataset_sampling=1.0,
                                                     cache_dir=None,
                                                     dataset_dir=None,
@@ -580,19 +616,21 @@ if __name__ == "__main__":
                                                     training_set_random_seed=42,
                                                     valid_test_split_random_seed=42,
                                                     num_proc=1,
-                                                    subset_ratio=0.005)  # only for debugging
+                                                    remove_special_chars=True,
+                                                    subset_ratio=0.005,
+                                                    )  # only for debugging
 
     pretraining_data = PretrainingData(pretraining_data_config)
     ds = pretraining_data.make_datasets()
     collator_config = CollatorConfig(tokenizer=tokenizer,
                                      is_downstream=False,
-                                     max_length=512,
+                                     max_length=456,
                                      pad_token_id=tokenizer.token_to_id("<PAD>"),
                                      text_column=None,
+                                     sentence_splitter=False
                                      )
-
     collator = BaseCollator(collator_config)
     train_set = ds[0]
     #TODO: outputs wrong batch size with data laoder
-    train_loader = DataLoader(train_set, batch_size=8, collate_fn=collator, num_workers=2)
+    train_loader = DataLoader(train_set, batch_size=8, collate_fn=collator, num_workers=2, shuffle=False)
     collator([train_set[0], train_set[1]])
